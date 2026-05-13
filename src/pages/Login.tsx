@@ -1,8 +1,9 @@
 import { useState, FormEvent } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../services/api';
 import { User } from '../types';
 import { motion } from 'motion/react';
-import { LogIn, Loader2 } from 'lucide-react';
+import { LogIn, Loader2, ArrowLeft } from 'lucide-react';
 import Swal from 'sweetalert2';
 
 interface LoginProps {
@@ -47,6 +48,17 @@ export default function Login({ onLogin }: LoginProps) {
   return (
     <div className="min-h-screen bg-warm-bg flex items-center justify-center p-6 bg-[url('https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?q=80&w=2669&auto=format&fit=crop')] bg-cover bg-center">
       <div className="absolute inset-0 bg-warm-bg/90 backdrop-blur-sm" />
+
+      {/* Back to Home */}
+      <Link
+        to="/"
+        className="absolute top-6 left-6 z-10 flex items-center gap-2 text-olive/50 hover:text-olive transition-colors text-xs font-bold uppercase tracking-widest group"
+      >
+        <span className="w-8 h-8 rounded-full border border-olive/20 flex items-center justify-center group-hover:border-olive/50 group-hover:bg-olive/5 transition-all">
+          <ArrowLeft size={14} className="group-hover:-translate-x-0.5 transition-transform" />
+        </span>
+        <span className="hidden sm:inline">Back to Home</span>
+      </Link>
       
       <motion.div 
         initial={{ opacity: 0, y: 20 }}

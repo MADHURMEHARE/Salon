@@ -413,17 +413,26 @@ async function startServer() {
     res.json(employees);
   });
 
-  app.post("/api/employees", authenticateToken, (req, res) => {
-    if ((req as any).user.role !== 'master_admin') return res.sendStatus(403);
-    const { name, email, password, role } = req.body;
-    const hashedPassword = bcrypt.hashSync(password, 10);
-    try {
-      db.prepare("INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)").run(name, email, hashedPassword, role);
-      res.status(201).json({ message: "Employee created" });
-    } catch (e) {
-      res.status(400).json({ message: "Email already exists" });
+app.post("/api/employees", authenticateToken, (req, res) => {
+  if ((req as any).user.role !== 'master_admin') return res.sendStatus(403);
+  const { name, email, password, role } = req.body;
+
+  if (!name || !email || !password || !role) {
+    return res.status(400).json({ message: "All fields are required" });
+  }
+
+  const hashedPassword = bcrypt.hashSync(password, 10);
+  try {
+    db.prepare("INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)").run(name, email, hashedPassword, role);
+    res.status(201).json({ message: "Employee created" });
+  } catch (e: any) {
+    if (e.message?.includes('UNIQUE constraint failed')) {
+      return res.status(400).json({ message: "Email already exists" });
     }
-  });
+    console.error("Create employee error:", e);
+    res.status(500).json({ message: "Failed to create employee" });
+  }
+});
 
   app.delete("/api/employees/:id", authenticateToken, (req, res) => {
     if ((req as any).user.role !== 'master_admin') return res.sendStatus(403);
