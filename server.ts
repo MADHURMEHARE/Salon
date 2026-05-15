@@ -7,6 +7,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import cors from "cors";
 import dotenv from "dotenv";
+import webpush from "web-push";
 
 dotenv.config();
 
@@ -115,6 +116,14 @@ db.exec(`
     notes TEXT,
     FOREIGN KEY(employee_id) REFERENCES users(id) ON DELETE CASCADE
   );
+
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    subscription TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
 `);
 
 // Seed initial admin if not exists
@@ -195,7 +204,15 @@ if (productCount.count === 0) {
   }
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || "salon-secret-key-123";
+const PUBLIC_VAPID_KEY = process.env.VAPID_PUBLIC_KEY;
+const PRIVATE_VAPID_KEY = process.env.VAPID_PRIVATE_KEY;
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || "mailto:example@example.com";
+
+if (PUBLIC_VAPID_KEY && PRIVATE_VAPID_KEY) {
+  webpush.setVapidDetails(VAPID_SUBJECT, PUBLIC_VAPID_KEY, PRIVATE_VAPID_KEY);
+}
+
+const JWT_SECRET = process.env.JWT_SECRET || process.env.SECRETE || "salon-secret-key-123";
 
 async function startServer() {
   const app = express();
@@ -232,7 +249,61 @@ async function startServer() {
     return !existing;
   };
 
+  const sendPushNotification = async (userId: number, title: string, body: string, url: string = '/') => {
+    if (!PUBLIC_VAPID_KEY || !PRIVATE_VAPID_KEY) return;
+
+    const subscriptions = db.prepare("SELECT subscription FROM push_subscriptions WHERE user_id = ?").all() as { subscription: string }[];
+    
+    const payload = JSON.stringify({
+      notification: {
+        title,
+        body,
+        icon: '/pwa-192x192.png',
+        badge: '/pwa-192x192.png',
+        data: { url }
+      }
+    });
+
+    const promises = subscriptions.map(sub => {
+      try {
+        const pushSub = JSON.parse(sub.subscription);
+        return webpush.sendNotification(pushSub, payload).catch(err => {
+          if (err.statusCode === 404 || err.statusCode === 410) {
+            db.prepare("DELETE FROM push_subscriptions WHERE subscription = ?").run(sub.subscription);
+          }
+        });
+      } catch (e) {
+        console.error('Invalid subscription:', e);
+      }
+    });
+
+    await Promise.all(promises);
+  };
+
   // --- Public API Routes ---
+  app.get("/api/public/vapid-key", (req, res) => {
+    res.json({ publicKey: PUBLIC_VAPID_KEY });
+  });
+
+  app.post("/api/push/subscribe", authenticateToken, (req, res) => {
+    const { subscription } = req.body;
+    const userId = (req as any).user.id;
+
+    if (!subscription) return res.status(400).json({ message: "Subscription required" });
+
+    try {
+      // Upsert subscription
+      const existing = db.prepare("SELECT id FROM push_subscriptions WHERE user_id = ? AND subscription = ?").get(userId, JSON.stringify(subscription));
+      if (!existing) {
+        db.prepare("INSERT INTO push_subscriptions (user_id, subscription) VALUES (?, ?)").run(userId, JSON.stringify(subscription));
+      }
+      res.status(201).json({});
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ message: "Failed to subscribe" });
+    }
+  });
+
   app.get("/api/public/services", (req, res) => {
     const services = db.prepare("SELECT id, name, price, duration_mins FROM services").all();
     res.json(services);
@@ -381,6 +452,11 @@ async function startServer() {
         db.prepare("INSERT INTO appointments (customer_id, employee_id, service_id, start_time, notes, status) VALUES (?, ?, ?, ?, ?, 'pending')").run(
           finalCustomerId, employee_id, service_id, start_time, notes || ""
         );
+
+        // Notify employee
+        const customerName = name || (db.prepare("SELECT name FROM customers WHERE id = ?").get(finalCustomerId) as any)?.name || "A customer";
+        const serviceName = (db.prepare("SELECT name FROM services WHERE id = ?").get(service_id) as any)?.name || "service";
+        sendPushNotification(employee_id, "New Booking!", `${customerName} booked ${serviceName} for ${new Date(start_time).toLocaleString()}`, '/admin/appointments');
       })();
       res.status(201).json({ message: "Booking request received" });
     } catch (e: any) {
@@ -413,26 +489,17 @@ async function startServer() {
     res.json(employees);
   });
 
-app.post("/api/employees", authenticateToken, (req, res) => {
-  if ((req as any).user.role !== 'master_admin') return res.sendStatus(403);
-  const { name, email, password, role } = req.body;
-
-  if (!name || !email || !password || !role) {
-    return res.status(400).json({ message: "All fields are required" });
-  }
-
-  const hashedPassword = bcrypt.hashSync(password, 10);
-  try {
-    db.prepare("INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)").run(name, email, hashedPassword, role);
-    res.status(201).json({ message: "Employee created" });
-  } catch (e: any) {
-    if (e.message?.includes('UNIQUE constraint failed')) {
-      return res.status(400).json({ message: "Email already exists" });
+  app.post("/api/employees", authenticateToken, (req, res) => {
+    if ((req as any).user.role !== 'master_admin') return res.sendStatus(403);
+    const { name, email, password, role } = req.body;
+    const hashedPassword = bcrypt.hashSync(password, 10);
+    try {
+      db.prepare("INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)").run(name, email, hashedPassword, role);
+      res.status(201).json({ message: "Employee created" });
+    } catch (e) {
+      res.status(400).json({ message: "Email already exists" });
     }
-    console.error("Create employee error:", e);
-    res.status(500).json({ message: "Failed to create employee" });
-  }
-});
+  });
 
   app.delete("/api/employees/:id", authenticateToken, (req, res) => {
     if ((req as any).user.role !== 'master_admin') return res.sendStatus(403);
@@ -580,11 +647,16 @@ app.post("/api/employees", authenticateToken, (req, res) => {
     res.sendStatus(201);
   });
 
-  app.put("/api/appointments/:id", authenticateToken, (req, res) => {
+  app.put("/api/appointments/:id", authenticateToken, async (req, res) => {
     const { customer_id, employee_id, service_id, start_time, notes, status } = req.body;
     db.prepare("UPDATE appointments SET customer_id = ?, employee_id = ?, service_id = ?, start_time = ?, notes = ?, status = ? WHERE id = ?").run(
       customer_id, employee_id, service_id, start_time, notes, status, req.params.id
     );
+
+    // Notify employee of changes
+    const customerName = (db.prepare("SELECT name FROM customers WHERE id = ?").get(customer_id) as any)?.name || "Customer";
+    sendPushNotification(employee_id, "Appointment Updated", `${customerName}'s appointment was updated to ${status}.`, '/admin/appointments');
+
     res.sendStatus(200);
   });
 
@@ -594,9 +666,17 @@ app.post("/api/employees", authenticateToken, (req, res) => {
     res.sendStatus(200);
   });
 
-  app.patch("/api/appointments/:id/status", authenticateToken, (req, res) => {
+  app.patch("/api/appointments/:id/status", authenticateToken, async (req, res) => {
     const { status } = req.body;
     db.prepare("UPDATE appointments SET status = ? WHERE id = ?").run(status, req.params.id);
+
+    // Notify employee of status change
+    const appt = db.prepare("SELECT employee_id, customer_id FROM appointments WHERE id = ?").get(req.params.id) as any;
+    if (appt) {
+      const customerName = (db.prepare("SELECT name FROM customers WHERE id = ?").get(appt.customer_id) as any)?.name || "Customer";
+      sendPushNotification(appt.employee_id, "Status Changed", `${customerName}'s appointment is now ${status}.`, '/admin/appointments');
+    }
+
     res.sendStatus(200);
   });
 
@@ -628,6 +708,9 @@ app.post("/api/employees", authenticateToken, (req, res) => {
       }
       
       db.prepare("UPDATE customers SET last_visit = CURRENT_TIMESTAMP WHERE id = ?").run(customer_id);
+
+      // Notify employee of checkout/commission credit
+      sendPushNotification(employee_id, "Payment Processed!", `Checkout complete. Commission credited to your account.`, '/admin');
     })();
 
     res.sendStatus(201);

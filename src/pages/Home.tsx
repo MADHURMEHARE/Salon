@@ -18,7 +18,6 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import Swal from 'sweetalert2';
-import Navbar from '../components/Navbar';
 
 interface Service {
   id: number;
@@ -363,7 +362,28 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-[#FDFCF9] text-ink font-sans selection:bg-olive/10">
       {/* Navigation */}
-     <Navbar/>
+      <nav className="fixed top-0 w-full z-50 bg-[#FDFCF9]/80 backdrop-blur-md border-b border-olive/5">
+        <div className="max-w-7xl mx-auto px-6 h-20 flex justify-between items-center">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-olive rounded-full flex items-center justify-center">
+              <Scissors className="text-white" size={20} />
+            </div>
+            <span className="serif text-xl font-semibold tracking-tight">Sai Krupa Salon</span>
+          </div>
+          
+          <div className="hidden md:flex items-center gap-10">
+            <a href="#services" className="text-sm font-bold uppercase tracking-widest text-olive/60 hover:text-olive transition-colors">Services</a>
+            <a href="#shop" className="text-sm font-bold uppercase tracking-widest text-olive/60 hover:text-olive transition-colors">Shop</a>
+            <a href="#book" className="text-sm font-bold uppercase tracking-widest text-olive/60 hover:text-olive transition-colors">Book Now</a>
+            <Link 
+              to="/login" 
+              className="px-6 py-2 border border-olive/12 rounded-full text-xs font-bold uppercase tracking-widest hover:bg-olive hover:text-white transition-all"
+            >
+              Staff Login
+            </Link>
+          </div>
+        </div>
+      </nav>
 
       {/* Hero Section */}
       <section className="relative h-screen flex items-center overflow-hidden pt-20">
